@@ -1,0 +1,227 @@
+
+```{r}
+token = '&$$app_token=g0WCJRYOqwL4kKEGpqsvgvzmn'
+```
+
+endpoint
+```{r}
+endpoint="https://data.wa.gov/resource/74eq-kst5.json?"
+```
+
+Subsetting API
+```{r}
+filters='&jurisdiction_type=Statewide'
+sqlQueries='&$where=election_year >= 2012'
+limit='$limit=4000000'
+```
+
+building url
+```{r}
+urlLink = paste0(endpoint,limit,filters,token)
+```
+
+
+```{r}
+library(jsonlite)
+contributions = fromJSON(urlLink)
+```
+
+```{r}
+is.data.frame(contributions)
+```
+what are the variables?
+```{r}
+names(contributions)
+```
+
+narrow down the variables
+```{r}
+contributions=contributions[,c('contributor_state','contributor_zip','amount','election_year','party')]
+```
+check data types
+```{r}
+str(contributions)
+```
+
+changing 'amount' variable from character to number
+```{r}
+contributions$amount=as.numeric(contributions$amount)
+```
+list out contributions by state
+```{r}
+table(contributions$contributor_state)
+```
+
+we just want data from WA
+```{r}
+WASzip=contributions[contributions$contributor_state%in%'WA',]
+```
+reset the index
+```{r}
+row.names(WASzip)=NULL
+```
+
+We want to make a map of zip codes of WA. Then we just need to verify that we have correct zip values. If we go to this link, we realize that they are between some values: 98001 and 99403.
+
+Remember we can use the comparison operands with text, but it is not doing arithmetical comparissons:
+```{r}
+'985'>'9800'
+```
+
+```{r}
+WASzip$contributor_zip[1] #the first value
+```
+
+Then, in cases like these, we simply turn the column as numeric. The text values representing numbers will become numbers, if it is not a number, they will turn into a NA.
+```{r}
+WASzip$contributor_zip=as.numeric(WASzip$contributor_zip)
+```
+
+As the cells have integers, I am confident to use comparisons:
+```{r}
+WASzip=WASzip[(WASzip$contributor_zip <=99403) & (WASzip$contributor_zip>=98001),]
+```
+
+Remember that there may be missing values somewhere else, just get rid of them:
+```{r}
+WASzip=WASzip[complete.cases(WASzip),]
+```
+
+I will reset indexes again after the complete.cases we applied before:
+```{r}
+row.names(WASzip)=NULL # good practice
+```
+
+The last step is to create a new data frame from this one. In the current one, each row represented a contribution; we do not need that, we need a data frame where each row is ZIP code, and the amount tells us the total contribution generated in that location. This is an aggregation process:
+```{r}
+# similar and saving space:
+numericColumns =c("amount")
+aggregateBY='contributor_zip'
+
+WA_zip_contri=aggregate(WASzip[,numericColumns], by=list(WASzip[,aggregateBY]), sum )
+names(WA_zip_contri)=c('contributor_zip','amount')
+#see result:
+head(WA_zip_contri)
+```
+
+```{r}
+compressedMap="https://github.com/EvansDataScience/data/raw/master/WAzips.zip"
+)
+```
+
+```{r}
+library(utils)
+temp=tempfile()
+download.file(compressedMap, temp)
+unzip(temp)
+```
+
+```{r}
+(maps=list.files(pattern = 'shp'))
+```
+
+You select which map from the object maps you need:
+```{r}
+library(rgdal)
+wazipMap <- rgdal::readOGR("SAEP_ZIP_Code_Tabulation_Areas.shp",stringsAsFactors=F) # use name
+```
+
+```{r}
+names=(wazipMap)
+```
+
+```{r}
+str(wazipMap$ZCTA5CE10)
+```
+
+```{r}
+str(WA_zip_contri$contributor_zip)
+```
+
+Let’s turn ZCTA5CE10 to integer:
+```{r}
+wazipMap$ZCTA5CE10=as.numeric(wazipMap$ZCTA5CE10)
+```
+
+
+As both are of the same type, we can merge.
+
+As the zip codes in each are under different name columns, I tell the merge function what columns to use:
+```{r}
+contribWAmap=merge(wazipMap,WA_zip_contri, by.x='ZCTA5CE10', by.y='contributor_zip',all.x=F)
+```
+
+```{r}
+nrow(contribWAmap)
+```
+
+```{r}
+nrow(wazipMap)
+```
+
+
+So, our last map does not have information on contributions for 11 zip codes. Let me plot the original map in black, and the new one in pink, to have an idea where I did not get a contribution:
+```{r}
+plot(wazipMap,col='black')
+plot(contribWAmap,col='pink',border='grey',add=T)
+```
+
+```{r}
+#NOW that you are in maps, make sure column names are not longer than 10 characters
+contribWAmap$contribDen=contribWAmap$amount/contribWAmap$POP2017
+```
+
+```{r}
+summary(contribWAmap$contribDen)
+```
+
+```{r}
+# notice the use of '@data'
+#finding the issue:
+contribWAmap@data[contribWAmap$contribDen==Inf,]['contribDen']
+```
+
+get rid of rows
+```{r}
+contribWAmap=contribWAmap[contribWAmap$contribDen!=Inf,]
+```
+
+```{r}
+summary(contribWAmap$contribDen)
+```
+
+```{r}
+library(RColorBrewer)
+library(classInt)
+```
+
+Define the input:
+```{r}
+varToPLot=contribWAmap$contribDen
+```
+
+```{r}
+numberOfClasses = 5
+colorForScale='YlGnBu'
+colors = brewer.pal(numberOfClasses, colorForScale)
+intervals <- classIntervals(varToPLot, numberOfClasses, 
+                            style = "quantile",
+                            dataPrecision=2)
+colorPallette <- findColours(intervals, colors)
+```
+
+Plot
+```{r}
+legendText="contribution rate"
+shrinkLegend=0.4
+title="Contribution towards candidates in WA since 2012"
+
+plot(wazipMap,col='red',main=title)
+plot(contribWAmap, col = colorPallette,border='grey',add=T)
+
+legend('topright', legend = names(attr(colorPallette, "table")), 
+       fill = attr(colorPallette, "palette"), cex = shrinkLegend, 
+       bty = "n",
+       title=legendText)
+```
+
